@@ -48,3 +48,7 @@ Assets/Model 3d/destroyed_buildings.glb.meta
 Assets/Model 3d/medieval_pentagon_castle.glb.meta
 Assets/Model 3d/floating_island.glb.meta
 Assets/Model 3d/dummy.blend.meta
+
+# Unity crash recovery
+/[Aa]ssets/_[Rr]ecovery/
+/[Aa]ssets/_[Rr]ecovery.meta
