@@ -6,7 +6,8 @@ using UnityEngine.InputSystem;
 /// <summary>
 /// Thin wrapper so gameplay scripts never touch a specific input backend.
 /// Uses the new Input System when it is enabled, otherwise the legacy Input Manager.
-/// Keys: WASD move, Shift sprint, Ctrl crouch, LMB grab, RMB highlight, wheel distance, Esc pause.
+/// Keys: WASD move, Shift sprint, Ctrl crouch, RMB select, LMB move selected, R + RMB rotate selected,
+/// X/Y/Z axis tools, S + (+/-) resize, wheel distance, Space jump (when enabled), Esc pause, F1 controls.
 /// </summary>
 public static class InputBridge
 {
@@ -52,12 +53,32 @@ public static class InputBridge
 #endif
     }
 
+    /// <summary>Space pressed this frame: jump, when PlayerController has jumping enabled.</summary>
+    public static bool JumpPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Space);
+#endif
+    }
+
     public static bool EscapePressed()
     {
 #if ENABLE_INPUT_SYSTEM
         return Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
 #else
         return Input.GetKeyDown(KeyCode.Escape);
+#endif
+    }
+
+    /// <summary>F1 pressed this frame: show or hide the controls panel.</summary>
+    public static bool ControlsPressed()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.f1Key.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.F1);
 #endif
     }
 
@@ -79,12 +100,76 @@ public static class InputBridge
 #endif
     }
 
-    public static bool HighlightPressed()
+    public static bool SelectPressed()
     {
 #if ENABLE_INPUT_SYSTEM
         return Mouse.current != null && Mouse.current.rightButton.wasPressedThisFrame;
 #else
         return Input.GetMouseButtonDown(1);
+#endif
+    }
+
+    /// <summary>R held: arms rotation of the selected item.</summary>
+    public static bool RotateKeyHeld()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.rKey.isPressed;
+#else
+        return Input.GetKey(KeyCode.R);
+#endif
+    }
+
+    /// <summary>Right mouse button held: rotates the selected item while rotation is armed.</summary>
+    public static bool RotateMouseHeld()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Mouse.current != null && Mouse.current.rightButton.isPressed;
+#else
+        return Input.GetMouseButton(1);
+#endif
+    }
+
+    /// <summary>X, Y or Z held: that local axis is active for moving, rotating or resizing the selected item.</summary>
+    public static bool AxisKeyHeld(Axis axis)
+    {
+#if ENABLE_INPUT_SYSTEM
+        var k = Keyboard.current;
+        if (k == null) return false;
+        return axis == Axis.X ? k.xKey.isPressed : axis == Axis.Y ? k.yKey.isPressed : axis == Axis.Z && k.zKey.isPressed;
+#else
+        return axis == Axis.X ? Input.GetKey(KeyCode.X) : axis == Axis.Y ? Input.GetKey(KeyCode.Y) : axis == Axis.Z && Input.GetKey(KeyCode.Z);
+#endif
+    }
+
+    /// <summary>S held: resize mode for the selected item.</summary>
+    public static bool ScaleKeyHeld()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.sKey.isPressed;
+#else
+        return Input.GetKey(KeyCode.S);
+#endif
+    }
+
+    /// <summary>+ held (the +/= key or Numpad +): grow.</summary>
+    public static bool ScaleUpHeld()
+    {
+#if ENABLE_INPUT_SYSTEM
+        var k = Keyboard.current;
+        return k != null && (k.equalsKey.isPressed || k.numpadPlusKey.isPressed);
+#else
+        return Input.GetKey(KeyCode.Equals) || Input.GetKey(KeyCode.KeypadPlus);
+#endif
+    }
+
+    /// <summary>- held (main keyboard or Numpad -): shrink.</summary>
+    public static bool ScaleDownHeld()
+    {
+#if ENABLE_INPUT_SYSTEM
+        var k = Keyboard.current;
+        return k != null && (k.minusKey.isPressed || k.numpadMinusKey.isPressed);
+#else
+        return Input.GetKey(KeyCode.Minus) || Input.GetKey(KeyCode.KeypadMinus);
 #endif
     }
 

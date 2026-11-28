@@ -66,7 +66,7 @@ public static class LabSceneBuilder
         Material steel = Mat("Steel", lit, new Color(0.45f, 0.47f, 0.5f));
         Material fixture = Mat("Fixture", lit, new Color(0.95f, 0.95f, 0.85f));
         Material arm = Mat("Arm", lit, new Color(0.8f, 0.6f, 0.5f));
-        Material outline = Mat("Outline", outlineShader, new Color(1f, 0.5333f, 0f));
+        Material outline = Mat("Outline", outlineShader, new Color(1f, 0.0784f, 0.5765f)); // DeepPink #FF1493
         Material itemBlue = Mat("ItemBlue", lit, new Color(0.25f, 0.45f, 0.9f));
         Material itemGrey = Mat("ItemGrey", lit, new Color(0.7f, 0.7f, 0.72f));
         Material itemDark = Mat("ItemDark", lit, new Color(0.15f, 0.15f, 0.17f));
@@ -89,7 +89,6 @@ public static class LabSceneBuilder
         RenderSettings.fogColor = new Color(0.04f, 0.045f, 0.05f);
 
         var lab = new GameObject("Lab");
-        lab.AddComponent<RoomAmbience>();
         Transform room = new GameObject("Room").transform;
         room.SetParent(lab.transform, false);
 
@@ -109,12 +108,12 @@ public static class LabSceneBuilder
             foreach (float z in new[] { -0.42f, 0.42f })
                 Prim(PrimitiveType.Cube, "Leg", table, new Vector3(x, 0.42f, z), new Vector3(0.08f, 0.84f, 0.08f), steel);
 
-        // Ceiling lights. The middle one flickers.
+        // Ceiling lights.
         Transform lights = new GameObject("Ceiling Lights").transform;
         lights.SetParent(lab.transform, false);
-        MakeCeilingLight("Light A", new Vector3(-2.4f, 2.98f, 1.5f), false, lights, fixture);
-        MakeCeilingLight("Light B (flicker)", new Vector3(0f, 2.98f, 0f), true, lights, fixture);
-        MakeCeilingLight("Light C", new Vector3(2.4f, 2.98f, -2f), false, lights, fixture);
+        MakeCeilingLight("Light A", new Vector3(-2.4f, 2.98f, 1.5f), lights, fixture);
+        MakeCeilingLight("Light B", new Vector3(0f, 2.98f, 0f), lights, fixture);
+        MakeCeilingLight("Light C", new Vector3(2.4f, 2.98f, -2f), lights, fixture);
 
         // Items: floating above the table (no gravity) plus one on the floor.
         Transform items = new GameObject("Items").transform;
@@ -187,18 +186,26 @@ public static class LabSceneBuilder
         camGo.AddComponent<UniversalAdditionalCameraData>().renderPostProcessing = true;
         camGo.AddComponent<AudioListener>();
 
-        // First-person arm: hand root on the camera, palm and forearm as placeholder cubes.
+        // First-person arm: hand root on the camera (HandController), one right hand of placeholder cubes.
         var handRoot = new GameObject("Hand Rig").transform;
         handRoot.SetParent(camGo.transform, false);
-        handRoot.localPosition = pi.restPose;
-        Prim(PrimitiveType.Cube, "Palm", handRoot, Vector3.zero, new Vector3(0.1f, 0.08f, 0.12f), armMat, false);
-        Prim(PrimitiveType.Cube, "Forearm", handRoot, new Vector3(0f, -0.12f, -0.22f), new Vector3(0.09f, 0.08f, 0.4f), armMat, false);
+        var hands = handRoot.gameObject.AddComponent<HandController>();
+        var rightHand = new GameObject("Right_Hand").transform;
+        rightHand.SetParent(handRoot, false);
+        rightHand.gameObject.AddComponent<HandClippingPrevention>();
+        hands.rightHand = rightHand;
+        hands.rightRestPos = new Vector3(0.28f, -0.32f, 0.5f);
+        hands.rightRestRot = Vector3.zero;
+        rightHand.localPosition = hands.rightRestPos;
+        Prim(PrimitiveType.Cube, "Palm", rightHand, Vector3.zero, new Vector3(0.1f, 0.08f, 0.12f), armMat, false);
+        Prim(PrimitiveType.Cube, "Forearm", rightHand, new Vector3(0f, -0.12f, -0.22f), new Vector3(0.09f, 0.08f, 0.4f), armMat, false);
 
         pc.head = head;
         pc.playerCamera = cam;
         pi.player = pc;
         pi.playerCamera = cam;
-        pi.hand = handRoot;
+        hands.interactor = pi;
+        hands.player = pc;
 
         var prefab = PrefabUtility.SaveAsPrefabAsset(player, PrefabsDir + "/Player.prefab");
         Object.DestroyImmediate(player);
@@ -215,7 +222,7 @@ public static class LabSceneBuilder
         go.GetComponent<Pickable>().mass = mass;
     }
 
-    static void MakeCeilingLight(string name, Vector3 pos, bool flicker, Transform parent, Material fixtureMat)
+    static void MakeCeilingLight(string name, Vector3 pos, Transform parent, Material fixtureMat)
     {
         var root = new GameObject(name).transform;
         root.SetParent(parent, false);
@@ -235,8 +242,6 @@ public static class LabSceneBuilder
         light.color = new Color(1f, 0.88f, 0.7f);
         light.intensity = LightIntensity;
         light.shadows = LightShadows.Soft;
-
-        if (flicker) lightGo.AddComponent<FlickerLight>();
     }
 
     // ---------- Helpers ----------

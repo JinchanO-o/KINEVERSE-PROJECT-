@@ -2,8 +2,8 @@ Shader "Lab/InvertedHullOutline"
 {
     Properties
     {
-        _OutlineColor ("Outline Color", Color) = (1, 0.5333, 0, 1)
-        _OutlineWidth ("Outline Width (object units)", Range(0, 0.1)) = 0.02
+        _OutlineColor ("Outline Color", Color) = (1, 0.0784, 0.5765, 1)
+        _OutlineWidth ("Outline Width (world metres)", Range(0, 0.05)) = 0.008
         _PulseAmount ("Pulse Amount", Range(0, 1)) = 0.25
         _PulseSpeed ("Pulse Speed", Float) = 3
     }
@@ -46,8 +46,10 @@ Shader "Lab/InvertedHullOutline"
             {
                 Varyings OUT;
                 float width = _OutlineWidth * (1.0 + _PulseAmount * sin(_Time.y * _PulseSpeed));
-                float3 pos = IN.positionOS.xyz + normalize(IN.normalOS) * width;
-                OUT.positionCS = TransformObjectToHClip(pos);
+                // Extrude in world space so the width stays the same on imported models with large scales.
+                float3 posWS = TransformObjectToWorld(IN.positionOS.xyz);
+                float3 normalWS = TransformObjectToWorldNormal(IN.normalOS);
+                OUT.positionCS = TransformWorldToHClip(posWS + normalWS * width);
                 return OUT;
             }
 

@@ -2,56 +2,63 @@ using System;
 using UnityEngine;
 
 /// <summary>
-/// Owns the single highlighted item: only one can be outlined at a time.
-/// The outline (orange #FF8800 by default) and its gentle pulse live in the
-/// Lab/InvertedHullOutline shader on the outline material.
+/// Owns the single selected item: only one can be selected at a time, and only the selected item
+/// can be moved. The selected item gets an outline (DeepPink #FF1493 by default) drawn by the
+/// Lab/InvertedHullOutline shader.
 /// </summary>
 public class HighlightManager : MonoBehaviour
 {
     public static HighlightManager Instance { get; private set; }
 
-    /// <summary>Fires with the newly highlighted item, or null when cleared.</summary>
-    public event Action<Pickable> HighlightChanged;
+    /// <summary>Fires with the newly selected item, or null when the selection is cleared.</summary>
+    public event Action<Pickable> SelectionChanged;
 
-    [Tooltip("Material using the Lab/InvertedHullOutline shader. Created by Tools > Lab > Build Main Scene.")]
+    [Tooltip("Material using the Lab/InvertedHullOutline shader. Copied at runtime, so the asset is never modified.")]
     public Material outlineMaterial;
 
-    [Tooltip("Outline colour. Default is #FF8800.")]
-    public Color outlineColor = new Color(1f, 0.5333f, 0f, 1f);
+    [Tooltip("Outline colour of the selected item. Default is DeepPink #FF1493.")]
+    public Color selectionColor = new Color(1f, 0.0784f, 0.5765f, 1f);
 
-    public Pickable Current { get; private set; }
+    public Pickable Selected { get; private set; }
+
+    /// <summary>Runtime copy of outlineMaterial tinted with selectionColor. Null if no material is assigned.</summary>
+    public Material SelectionMaterial { get; private set; }
 
     void Awake()
     {
         Instance = this;
+        if (outlineMaterial != null) SelectionMaterial = new Material(outlineMaterial);
+        else Debug.LogWarning("HighlightManager: no outline material assigned, selected items will not be outlined.", this);
         ApplyColor();
     }
 
+    // Lets the colour be tuned live in the Inspector during Play mode.
     void OnValidate() => ApplyColor();
 
     void OnDestroy()
     {
         if (Instance == this) Instance = null;
+        if (SelectionMaterial != null) Destroy(SelectionMaterial);
     }
 
     void ApplyColor()
     {
-        if (outlineMaterial != null) outlineMaterial.SetColor("_OutlineColor", outlineColor);
+        if (SelectionMaterial != null) SelectionMaterial.SetColor("_OutlineColor", selectionColor);
     }
 
-    /// <summary>Right-click behaviour: highlight the item, or remove the highlight if it is already on.</summary>
+    /// <summary>Right-click on an item: select it, or clear the selection if it is already selected.</summary>
     public void Toggle(Pickable item)
     {
-        if (item == null) return;
-        SetHighlight(Current == item ? null : item);
+        Select(Selected == item ? null : item);
     }
 
-    public void SetHighlight(Pickable item)
+    /// <summary>Selects the item (null clears). The previous selection loses its outline.</summary>
+    public void Select(Pickable item)
     {
-        if (Current == item) return;
-        if (Current != null) Current.SetHighlighted(false);
-        Current = item;
-        if (Current != null) Current.SetHighlighted(true);
-        HighlightChanged?.Invoke(Current);
+        if (Selected == item) return;
+        if (Selected != null) Selected.SetSelected(false);
+        Selected = item;
+        if (Selected != null) Selected.SetSelected(true);
+        SelectionChanged?.Invoke(Selected);
     }
 }

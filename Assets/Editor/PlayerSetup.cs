@@ -5,9 +5,9 @@ using UnityEngine;
 /// <summary>
 /// Editor window that builds the first-person hands rig:
 ///   Main Camera
-///     Hands_Root            (HandController)
-///       Left_Hand           (HandClippingPrevention)
-///       Right_Hand          (HandClippingPrevention)
+///     Hands_Root            (HandController: poses both hands from PlayerInteractor.HandState)
+///       Left_Hand           (HandClippingPrevention, called by HandController)
+///       Right_Hand          (HandClippingPrevention; this hand also reaches for items)
 ///
 /// Open from the menu: Tools > Player > Setup Hands.
 /// Assign a camera and both hand prefabs, then click Build Hand Rig.
@@ -38,7 +38,8 @@ public class PlayerSetup : EditorWindow
         EditorGUILayout.HelpBox(
             "Assign a camera and both hand prefabs. Click Build Hand Rig.\n" +
             "The script creates Hands_Root under the camera, instantiates the prefabs as Left_Hand and Right_Hand,\n" +
-            "and wires up HandController + HandClippingPrevention.", MessageType.Info);
+            "and wires up HandController + HandClippingPrevention.\n" +
+            "Use the player camera, so HandController finds PlayerInteractor and PlayerController in its parents.", MessageType.Info);
 
         _targetCamera    = (Camera)EditorGUILayout.ObjectField("Target Camera", _targetCamera, typeof(Camera), true);
         _leftHandPrefab  = (GameObject)EditorGUILayout.ObjectField("Left Hand Prefab",  _leftHandPrefab,  typeof(GameObject), false);
@@ -78,6 +79,10 @@ public class PlayerSetup : EditorWindow
         root.transform.SetParent(cam.transform, false);
 
         var ctrl = root.AddComponent<HandController>();
+        ctrl.interactor = cam.GetComponentInParent<PlayerInteractor>();
+        ctrl.player = cam.GetComponentInParent<PlayerController>();
+        if (ctrl.interactor == null)
+            Debug.LogWarning("PlayerSetup: no PlayerInteractor above '" + cam.name + "', so the hands will stay in the idle pose.");
         ctrl.leftRestPos = leftPos;
         ctrl.leftRestRot = leftRot;
         ctrl.rightRestPos = rightPos;

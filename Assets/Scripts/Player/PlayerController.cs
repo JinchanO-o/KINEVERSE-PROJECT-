@@ -2,9 +2,11 @@ using UnityEngine;
 
 /// <summary>
 /// First-person locomotion and camera feel: smoothed mouse look, accelerated WASD movement,
-/// sprint/crouch stances, head bob, sprint FOV, held-item sway, camera shake and
+/// sprint/crouch stances, optional jump, head bob, sprint FOV, held-item sway, camera shake and
 /// speed-synced footsteps. Attach to the Player root (requires CharacterController).
-/// Hierarchy: Player (this) > Head > Camera (ArmRig is parented to the Camera).
+/// Hierarchy: Player (this) > Head > Camera > hand root (HandController).
+/// The Head carries pitch and stance height; the Camera carries only the layered feel offsets (see HandleCameraFeel).
+/// The cursor lock is owned by HUD (locked while playing, free while paused).
 /// </summary>
 [RequireComponent(typeof(CharacterController))]
 public class PlayerController : MonoBehaviour
@@ -33,6 +35,9 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Deceleration in m/s^2 when input is released. Lower = longer glide, never an instant stop.")]
     public float deceleration = 10f;
     [Tooltip("Downward acceleration in m/s^2.")] public float gravity = 24f;
+    [Tooltip("Space jumps when on. Off by default: the lab is designed without jumping.")]
+    public bool jumpEnabled = false;
+    [Tooltip("Jump apex height in metres.")] public float jumpHeight = 1f;
     [Tooltip("Layers that block the held item and crouch headroom. Player and Pickable are removed automatically.")]
     public LayerMask obstacleMask = ~0;
 
@@ -42,6 +47,16 @@ public class PlayerController : MonoBehaviour
     [Tooltip("Head (camera pivot) height when standing.")] public float standHeadY = 1.6f;
     [Tooltip("Head height when crouching.")] public float crouchHeadY = 0.95f;
     [Tooltip("How fast stance changes blend. Higher = snappier.")] public float stanceSpeed = 10f;
+
+    [Header("Character Controller")]
+    [Tooltip("Capsule radius in metres. Also sizes the headroom check before standing up.")]
+    public float radius = 0.3f;
+    [Tooltip("Tallest step climbed without jumping (metres). Keep below the crouch height.")]
+    public float stepOffset = 0.3f;
+    [Tooltip("Steepest walkable slope in degrees.")]
+    [Range(0f, 90f)] public float slopeLimit = 45f;
+    [Tooltip("Contact skin in metres. Unity recommends about 10% of the radius; too small and the capsule sticks.")]
+    public float skinWidth = 0.08f;
 
     [Header("Head Bob")]
     [Tooltip("Vertical bob in metres at full speed. 0 disables it.")] public float bobAmount = 0.045f;
@@ -70,11 +85,18 @@ public class PlayerController : MonoBehaviour
     /// <summary>Set by PlayerInteractor while an item is held; enables sway.</summary>
     public bool IsHoldingItem { get; set; }
 
+    /// <summary>Set by PlayerInteractor while the mouse rotates or drags an item; mouse look is paused.</summary>
+    public bool LookLocked { get; set; }
+
+    /// <summary>Set by PlayerInteractor while S resizes an item (S is also walk-back); walking is paused.</summary>
+    public bool MovementLocked { get; set; }
+
     CharacterController _cc;
     Vector3 _velocity;
     float _yawTarget, _pitchTarget;
     float _yawSmooth, _pitchSmooth;
     float _headY;
+    Vector3 _headRest, _cameraRest; // local positions as placed in the scene
     float _bobPhase;
     float _stepDistance;
     float _shake;
@@ -99,13 +121,15 @@ public class PlayerController : MonoBehaviour
 
         _cc.height = standHeight;
         _cc.center = new Vector3(0f, standHeight * 0.5f, 0f);
-        _cc.radius = 0.3f;
+        _cc.radius = radius;
+        _cc.stepOffset = stepOffset;
+        _cc.slopeLimit = slopeLimit;
+        _cc.skinWidth = skinWidth;
 
         _yawTarget = _yawSmooth = transform.eulerAngles.y;
         _headY = standHeadY;
-
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
+        _headRest = head.localPosition;
+        _cameraRest = playerCamera.transform.localPosition;
     }
 
     void Update()
@@ -127,7 +151,7 @@ public class PlayerController : MonoBehaviour
 
     void HandleLook(float dt)
     {
-        Vector2 look = InputBridge.Look();
+        Vector2 look = LookLocked ? Vector2.zero : InputBridge.Look();
         _yawTarget += look.x * mouseSensitivity;
         _pitchTarget = Mathf.Clamp(_pitchTarget - look.y * mouseSensitivity, -maxPitch, maxPitch);
 
@@ -145,9 +169,11 @@ public class PlayerController : MonoBehaviour
         bool wantCrouch = InputBridge.Crouch();
         if (!wantCrouch && IsCrouching)
         {
-            // Only stand back up when there is headroom.
-            Vector3 headPos = transform.position + Vector3.up * (standHeight - 0.25f);
-            if (Physics.CheckSphere(headPos, 0.25f, obstacleMask, QueryTriggerInteraction.Ignore))
+            // Only stand back up when the top of the standing capsule would be clear. The capsule may sit up to
+            // skinWidth inside a wall it is pressed against, so the probe is that much thinner.
+            float probe = Mathf.Max(0.05f, radius - skinWidth);
+            Vector3 top = transform.position + Vector3.up * (standHeight - probe);
+            if (Physics.CheckSphere(top, probe, obstacleMask, QueryTriggerInteraction.Ignore))
                 wantCrouch = true;
         }
         IsCrouching = wantCrouch;
@@ -156,12 +182,12 @@ public class PlayerController : MonoBehaviour
         _cc.height = Mathf.Lerp(_cc.height, IsCrouching ? crouchHeight : standHeight, k);
         _cc.center = new Vector3(0f, _cc.height * 0.5f, 0f);
         _headY = Mathf.Lerp(_headY, IsCrouching ? crouchHeadY : standHeadY, k);
-        head.localPosition = new Vector3(0f, _headY, 0f);
+        head.localPosition = new Vector3(_headRest.x, _headY, _headRest.z);
     }
 
     void HandleMovement(float dt)
     {
-        Vector2 input = InputBridge.Move();
+        Vector2 input = MovementLocked ? Vector2.zero : InputBridge.Move();
         Vector3 wish = transform.right * input.x + transform.forward * input.y;
         if (wish.sqrMagnitude > 1f) wish.Normalize();
 
@@ -176,6 +202,8 @@ public class PlayerController : MonoBehaviour
         _grounded = _cc.isGrounded;
         if (_grounded && _velocity.y < 0f) _velocity.y = -2f;
         else _velocity.y -= gravity * dt;
+        if (jumpEnabled && _grounded && !IsCrouching && !MovementLocked && InputBridge.JumpPressed())
+            _velocity.y = Mathf.Sqrt(2f * gravity * jumpHeight);
 
         _velocity = new Vector3(horizontal.x, _velocity.y, horizontal.z);
         _cc.Move(_velocity * dt); // CharacterController resolves walls, table and floor
@@ -185,26 +213,34 @@ public class PlayerController : MonoBehaviour
             _bobPhase += HorizontalSpeed * dt * bobPerMetre * Mathf.PI * 2f;
     }
 
+    /// <summary>
+    /// Camera local position = rest (as placed in the scene) + head bob + held-item sway + shake.
+    /// Each layer is computed on its own and they are only summed here, so none overwrites another.
+    /// </summary>
     void HandleCameraFeel(float dt)
     {
-        float moveAmount = Mathf.Clamp01(HorizontalSpeed / Mathf.Max(0.01f, sprintSpeed));
-        float bobY = Mathf.Sin(_bobPhase * 2f) * bobAmount * moveAmount;
-        float bobX = Mathf.Cos(_bobPhase) * bobSway * moveAmount;
-
-        float swayX = 0f, swayY = 0f;
-        if (IsHoldingItem)
-        {
-            swayX = Mathf.Sin(Time.time * 1.1f) * heldSway;
-            swayY = Mathf.Cos(Time.time * 1.7f) * heldSway * 0.6f;
-        }
-
-        _shake = Mathf.MoveTowards(_shake, 0f, dt * 1.5f);
-        Vector3 shakeOffset = _shake > 0f ? Random.insideUnitSphere * (_shake * _shake * 0.04f) : Vector3.zero;
-
-        playerCamera.transform.localPosition = new Vector3(bobX + swayX, bobY + swayY, 0f) + shakeOffset;
+        playerCamera.transform.localPosition = _cameraRest + HeadBobOffset() + HeldSwayOffset() + ShakeOffset(dt);
 
         float targetFov = IsSprinting ? sprintFov : baseFov;
         playerCamera.fieldOfView = Mathf.Lerp(playerCamera.fieldOfView, targetFov, 1f - Mathf.Exp(-fovSpeed * dt));
+    }
+
+    Vector3 HeadBobOffset()
+    {
+        float moveAmount = Mathf.Clamp01(HorizontalSpeed / Mathf.Max(0.01f, sprintSpeed));
+        return new Vector3(Mathf.Cos(_bobPhase) * bobSway, Mathf.Sin(_bobPhase * 2f) * bobAmount, 0f) * moveAmount;
+    }
+
+    Vector3 HeldSwayOffset()
+    {
+        if (!IsHoldingItem) return Vector3.zero;
+        return new Vector3(Mathf.Sin(Time.time * 1.1f) * heldSway, Mathf.Cos(Time.time * 1.7f) * heldSway * 0.6f, 0f);
+    }
+
+    Vector3 ShakeOffset(float dt)
+    {
+        _shake = Mathf.MoveTowards(_shake, 0f, dt * 1.5f);
+        return _shake > 0f ? Random.insideUnitSphere * (_shake * _shake * 0.04f) : Vector3.zero;
     }
 
     void HandleFootsteps(float dt)
