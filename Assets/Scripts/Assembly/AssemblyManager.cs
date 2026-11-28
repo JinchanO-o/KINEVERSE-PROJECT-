@@ -118,6 +118,7 @@ public class AssemblyManager : MonoBehaviour
         public bool onlyAxisKeyMissing; // everything fits but requireAxisMode wants the axis key held
         public float distance;          // |mover piece centre - target|
         public float along;             // axial, positive on the side input a comes from
+        public float side;              // +1 when the mover holds the joint's input a, -1 when it holds b
         public float tolerance;         // overshoot past the target that still counts as the right side
         public float largerLength;      // longest side of the larger of the two units (magnet radius unit)
 
@@ -150,6 +151,8 @@ public class AssemblyManager : MonoBehaviour
     {
         public Candidate c;
         public Candidate atStart;         // measurements when the pull began, logged only if it lands
+        public bool alignFirst;           // two phases: line up in front of the target, then slide in along the axis
+        public Vector3 alignPosition;     // root position at the end of the line-up phase
         public float time;
         public Vector3 startPosition, endPosition, startScale, endScale;
         public Quaternion startRotation, endRotation;
@@ -333,9 +336,10 @@ public class AssemblyManager : MonoBehaviour
             }
         }
 
+        int total = wanted.Count;
+        int bound = BindPreassembled(wanted);
         List<List<Transform>> groups = SplitGroups(wanted);
 
-        int bound = 0;
         foreach (KeyValuePair<string, (AssemblyRecipe recipe, int slot)> entry in wanted)
         {
             AssemblyTemplate.Node node = Template.Find(entry.Key);
@@ -359,7 +363,73 @@ public class AssemblyManager : MonoBehaviour
             bound++;
         }
         foreach (List<Transform> group in groups) Spread(group);
-        Debug.Log($"AssemblyManager: bound {bound} of {wanted.Count} pieces for {recipes.Count} recipes.", this);
+        Debug.Log($"AssemblyManager: bound {bound} of {total} pieces for {recipes.Count} recipes.", this);
+    }
+
+    /// <summary>
+    /// Binds scene objects the player already handles as one finished group: a root with its own Pickable whose direct
+    /// children are every input of a recipe made only of template nodes (e.g. "tru_cau 1" holding the 4 pillars). The
+    /// children become the pieces of one unit, the root loses its own Pickable and solid colliders (Pickable.Awake fits
+    /// a box to the root, which would stay behind as an invisible wall) but keeps its other components, and the recipe
+    /// is completed at once without effects, so its result is ready for the next recipe. Bound names are removed from
+    /// wanted. Returns the number of pieces bound.
+    /// </summary>
+    int BindPreassembled(Dictionary<string, (AssemblyRecipe recipe, int slot)> wanted)
+    {
+        int bound = 0;
+        foreach (GameObject root in SceneManager.GetActiveScene().GetRootGameObjects())
+        {
+            var rootPickable = root.GetComponent<Pickable>();
+            if (rootPickable == null || IsTemplate(root) || root.GetComponent<AssemblyUnit>() != null) continue;
+
+            foreach (AssemblyRecipe recipe in recipes)
+            {
+                if (recipe == null || recipe.inputs.Count == 0 || !AllTemplateInputs(recipe)) continue;
+                var children = new List<(int slot, Transform child, AssemblyTemplate.Node node)>();
+                for (int i = 0; i < recipe.inputs.Count; i++)
+                {
+                    string nodeName = recipe.inputs[i].templateNode;
+                    Transform child = root.transform.Find(nodeName);
+                    AssemblyTemplate.Node node = Template.Find(nodeName);
+                    if (child == null || child.GetComponent<Renderer>() == null || node == null ||
+                        !wanted.TryGetValue(nodeName, out var owner) || owner.recipe != recipe)
+                    {
+                        children = null;
+                        break;
+                    }
+                    children.Add((i, child, node));
+                }
+                if (children == null) continue;
+
+                var slots = new List<(int, List<AssemblyPiece>)>();
+                foreach ((int slot, Transform child, AssemblyTemplate.Node node) in children)
+                {
+                    var piece = child.gameObject.AddComponent<AssemblyPiece>();
+                    piece.Init(node);
+                    piece.EnsureCollider();
+                    slots.Add((slot, new List<AssemblyPiece> { piece }));
+                    wanted.Remove(child.name);
+                }
+                foreach (Collider c in root.GetComponents<Collider>())
+                    if (!c.isTrigger) Destroy(c);
+                AssemblyUnit unit = CreateUnit(recipe.DisplayName, recipe, slots[0].Item2[0].FrameRotation, slots, rootPickable);
+                Destroy(rootPickable);
+                bound += children.Count;
+
+                Debug.Log($"AssemblyManager: {root.name} already holds every input of {recipe.DisplayName}; it starts assembled.", root);
+                StartCoroutine(Complete(unit, true)); // instant: runs to the end right here
+                break;
+            }
+        }
+        return bound;
+    }
+
+    /// <summary>True when every input of the recipe is a template node (none is another recipe's result).</summary>
+    static bool AllTemplateInputs(AssemblyRecipe recipe)
+    {
+        foreach (AssemblyRecipe.Input input in recipe.inputs)
+            if (input.fromRecipe != null || string.IsNullOrEmpty(input.templateNode)) return false;
+        return true;
     }
 
     /// <summary>Detaches recipe pieces from their scene group roots. Returns the pieces of each split group.</summary>
@@ -581,7 +651,7 @@ public class AssemblyManager : MonoBehaviour
         {
             mover = mover, partner = partner, moverPiece = mine, partnerPiece = theirs, joint = joint,
             targetCenter = target, axis = axis, localAxis = LocalAxis(mover.transform, axis),
-            lateral = (offset - axis * axial).magnitude, axial = axial, along = axial * side,
+            lateral = (offset - axis * axial).magnitude, axial = axial, along = axial * side, side = side,
             distance = offset.magnitude, angle = Quaternion.Angle(mine.FrameRotation, frame),
             refSize = refSize, tolerance = recipe.corridorRadius * refSize * 0.5f, // a little overshoot still counts
             largerLength = Mathf.Max(mover.Length, partner.Length),
@@ -855,6 +925,15 @@ public class AssemblyManager : MonoBehaviour
             endPosition = position, endRotation = rotation, endScale = scale,
             lastSetPosition = root.position,
         };
+        if (recipe.magnetAlignFirst)
+        {
+            // Line up straight in front of the target on the side the part comes from, as far out along the axis as it
+            // is now (a little at least), so the last phase is a pure slide along the axis.
+            Vector3 from = ApproachDirection(nearest);
+            float back = Mathf.Max(Mathf.Abs(nearest.axial), 0.02f * nearest.largerLength);
+            _pull.alignFirst = true;
+            _pull.alignPosition = position + from * back;
+        }
         nearest.guideLength = recipe.magnetRadius * nearest.largerLength;
         nearest.partner.Busy = true; // the partner holds still and cannot be grabbed while it is the target
         return true;
@@ -914,9 +993,30 @@ public class AssemblyManager : MonoBehaviour
         }
 
         p.time += dt;
-        float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(p.time / recipe.magnetSeconds));
-        root.SetPositionAndRotation(Vector3.Lerp(p.startPosition, p.endPosition, k), Quaternion.Slerp(p.startRotation, p.endRotation, k));
-        root.localScale = Vector3.Lerp(p.startScale, p.endScale, k);
+        float seconds = recipe.magnetSeconds;
+        if (p.alignFirst)
+        {
+            // Phase 1 (60%): to the line-up pose, turning to the final rotation. Phase 2: straight in along the axis.
+            float split = seconds * 0.6f;
+            if (p.time < split)
+            {
+                float k = Mathf.SmoothStep(0f, 1f, p.time / split);
+                root.SetPositionAndRotation(Vector3.Lerp(p.startPosition, p.alignPosition, k), Quaternion.Slerp(p.startRotation, p.endRotation, k));
+                root.localScale = Vector3.Lerp(p.startScale, p.endScale, k);
+            }
+            else
+            {
+                float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((p.time - split) / (seconds - split)));
+                root.SetPositionAndRotation(Vector3.Lerp(p.alignPosition, p.endPosition, k), p.endRotation);
+                root.localScale = p.endScale;
+            }
+        }
+        else
+        {
+            float k = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(p.time / seconds));
+            root.SetPositionAndRotation(Vector3.Lerp(p.startPosition, p.endPosition, k), Quaternion.Slerp(p.startRotation, p.endRotation, k));
+            root.localScale = Vector3.Lerp(p.startScale, p.endScale, k);
+        }
         p.lastSetPosition = root.position;
         c.angle = Quaternion.Angle(c.moverPiece.FrameRotation, c.partnerPiece.FrameRotation);
         c.localAxis = LocalAxis(root, c.axis);
@@ -928,6 +1028,20 @@ public class AssemblyManager : MonoBehaviour
         mover.Busy = true;
         if (selected) selection.Select(null); // ends the grab
         StartCoroutine(FinishSnap(mover, partner, c.targetCenter, c.partnerPiece.FrameRotation));
+    }
+
+    /// <summary>
+    /// Unit direction from the target toward the side the mover comes from: the joint's approach side (flipped when the
+    /// mover holds input b), or for Either the side it is on now.
+    /// </summary>
+    static Vector3 ApproachDirection(Candidate c)
+    {
+        switch (c.joint.approach)
+        {
+            case ApproachSide.Positive: return c.axis * c.side;
+            case ApproachSide.Negative: return -c.axis * c.side;
+            default: return c.axis * (c.axial >= 0f ? 1f : -1f);
+        }
     }
 
     void EndPull(bool keepPartnerBusy)
@@ -1099,7 +1213,12 @@ public class AssemblyManager : MonoBehaviour
 
     // ---------- Completion ----------
 
-    IEnumerator Complete(AssemblyUnit unit)
+    /// <summary>
+    /// Turns a full unit into its recipe's result (a model, or the locked group itself) and hands it to the next recipe
+    /// up the tree. instant skips every effect, sound, pulse and HUD message, so the coroutine finishes within the
+    /// StartCoroutine call (used for groups that start the scene already assembled).
+    /// </summary>
+    IEnumerator Complete(AssemblyUnit unit, bool instant = false)
     {
         unit.Busy = true;
         AssemblyRecipe recipe = unit.Recipe;
@@ -1126,8 +1245,11 @@ public class AssemblyManager : MonoBehaviour
         if (resultNode == null)
         {
             // No model of its own (e.g. the pillar row): the locked group is the result.
-            yield return recipe.effect == AssemblyEffect.GlowSwap ? Glow(unit, true) : Pulse(unit.transform, 1.06f);
-            AssemblySounds.PlayAt(AssemblySounds.Pop(), center);
+            if (!instant)
+            {
+                yield return recipe.effect == AssemblyEffect.GlowSwap ? Glow(unit, true) : Pulse(unit.transform, 1.06f);
+                AssemblySounds.PlayAt(AssemblySounds.Pop(), center);
+            }
             var pieces = new List<AssemblyPiece>(unit.Pieces);
             unit.Slots.Clear();
             unit.AddSlot(parent != null ? parentSlot : 0, pieces);
@@ -1138,8 +1260,11 @@ public class AssemblyManager : MonoBehaviour
         }
         else
         {
-            yield return recipe.effect == AssemblyEffect.GlowSwap ? Glow(unit, false) : FlyTogether(unit, center);
-            AssemblySounds.PlayAt(AssemblySounds.Pop(), center);
+            if (!instant)
+            {
+                yield return recipe.effect == AssemblyEffect.GlowSwap ? Glow(unit, false) : FlyTogether(unit, center);
+                AssemblySounds.PlayAt(AssemblySounds.Pop(), center);
+            }
             AssemblyPiece model = SpawnResult(resultNode, frame, origin, scale);
             result = CreateUnit(recipe.DisplayName, parent, frame,
                                 new[] { (parent != null ? parentSlot : 0, new List<AssemblyPiece> { model }) }, unit.Pickable);
@@ -1153,14 +1278,17 @@ public class AssemblyManager : MonoBehaviour
                 p.Unit = null;
             }
             RemoveUnit(unit);
-            result.Busy = true;
-            yield return Pulse(result.transform, 1.08f);
+            if (!instant)
+            {
+                result.Busy = true;
+                yield return Pulse(result.transform, 1.08f);
+            }
         }
 
         _completed.Add(record);
         result.Busy = false;
         string message = !string.IsNullOrEmpty(recipe.completionMessage) ? recipe.completionMessage : $"{recipe.DisplayName} assembled";
-        HUD.ShowMessage(message, parent == null ? 6f : 3f);
+        if (!instant) HUD.ShowMessage(message, parent == null ? 6f : 3f);
         Debug.Log($"AssemblyManager: {recipe.DisplayName} complete" + (parent != null ? $", now an input of {parent.DisplayName}." : "."), this);
     }
 
