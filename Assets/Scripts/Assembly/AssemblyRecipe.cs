@@ -87,6 +87,9 @@ public class AssemblyRecipe : ScriptableObject
     [Range(0.1f, 2f)] public float magnetSeconds = 0.4f;
     [Tooltip("Dragging the part away from its target faster than this (metres per second) breaks the pull.")]
     [Min(0.1f)] public float magnetBreakSpeed = 6f;
+    [Tooltip("Pull in two phases: first line the part up straight in front of its target along the joint axis (and turn it), " +
+             "then slide it in along the axis. Off: one straight move from where it is to its place.")]
+    public bool magnetAlignFirst;
 
     [Header("Result")]
     [Tooltip("Template node that replaces the pieces when the recipe is complete (the template root's name for the " +

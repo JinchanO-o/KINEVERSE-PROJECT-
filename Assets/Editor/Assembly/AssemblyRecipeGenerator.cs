@@ -25,27 +25,33 @@ public static class AssemblyRecipeGenerator
         Thresholds(deck, corridor: 0.15f, snap: 0.35f, guide: 1.5f);
 
         // Recipe 2: the 4 pillars along X lock into one group at the template spacing (no model of their own).
+        // A scene object that already holds all 4 pillars as children (e.g. "tru_cau 1") starts as a finished pillar
+        // row: AssemblyManager binds it as one unit and completes this recipe at Play start.
         AssemblyRecipe pillars = Recipe("2 Pillar Row", "Pillar row", Nodes("tru_cau", "tru_cau.001", "tru_cau.002", "tru_cau.003"),
                                         Chain(4, Axis.X), "");
         Thresholds(pillars, corridor: 0.3f, snap: 0.6f, guide: 1.5f);
 
         // Recipe 3: the deck is lowered onto the pillar row along Y, from above. Both parts are ~20 m long, so the
-        // thresholds follow the larger part's length and a magnet pulls the deck in once it is roughly in place.
+        // thresholds follow the larger part's length and a magnet pulls the deck in once it is roughly in place:
+        // first straight above the pillars, then down along Y.
         AssemblyRecipe bridge = Recipe("3 Bridge", "Bridge", From(deck, pillars),
                                        new List<AssemblyRecipe.Joint> { Joint(0, 1, Axis.Y, ApproachSide.Positive) }, "");
         Thresholds(bridge, corridor: 0.06f, snap: 0.12f, guide: 0.4f);
-        Magnet(bridge);
+        Magnet(bridge, largerThresholds: true, alignFirst: true);
 
-        // Recipe 4: head, body and tail along X (head at -X, tail at +X, as in the template).
+        // Recipe 4: head, body and tail along X (head at -X, tail at +X, as in the template). The magnet pulls head
+        // and tail onto the body; the thresholds stay those of similar-sized pieces.
         AssemblyRecipe dragon = Recipe("4 Dragon", "Dragon", Nodes("dau_rong", "than_rong", "duoi_rong"),
                                        Chain(3, Axis.X), "");
         Thresholds(dragon, corridor: 0.2f, snap: 0.4f, guide: 1.5f);
+        Magnet(dragon, largerThresholds: false, alignFirst: false);
 
-        // Recipe 5: the dragon is lowered onto the bridge along Y and the whole model (A3) appears.
+        // Recipe 5: the dragon is lowered onto the bridge along Y (magnet: first straight above, then down) and the
+        // whole model (A3) appears.
         AssemblyRecipe final = Recipe("5 Dragon Bridge", "Dragon Bridge", From(dragon, bridge),
                                       new List<AssemblyRecipe.Joint> { Joint(0, 1, Axis.Y, ApproachSide.Positive) }, "A3");
         Thresholds(final, corridor: 0.06f, snap: 0.12f, guide: 0.4f);
-        Magnet(final);
+        Magnet(final, largerThresholds: true, alignFirst: true);
         final.completionMessage = "Dragon Bridge complete!";
         EditorUtility.SetDirty(final);
 
@@ -87,6 +93,7 @@ public static class AssemblyRecipeGenerator
         recipe.magnetMaxAngle = 45f;
         recipe.magnetSeconds = 0.4f;
         recipe.magnetBreakSpeed = 6f;
+        recipe.magnetAlignFirst = false;
         EditorUtility.SetDirty(recipe);
         return recipe;
     }
@@ -100,12 +107,14 @@ public static class AssemblyRecipeGenerator
     }
 
     /// <summary>
-    /// For joining big sub-assemblies: thresholds follow the larger part's length, and the magnet pulls the part in
-    /// from within a quarter of that length, correcting up to 45 degrees.
+    /// Turns on the magnet: it pulls the part in from within a quarter of the larger part's length, correcting up to
+    /// 45 degrees. largerThresholds also makes the snap thresholds follow the larger part's length (for joining big
+    /// sub-assemblies); alignFirst pulls in two phases, lined up in front of the target first, then along the axis.
     /// </summary>
-    static void Magnet(AssemblyRecipe recipe)
+    static void Magnet(AssemblyRecipe recipe, bool largerThresholds, bool alignFirst)
     {
-        recipe.thresholdSize = ThresholdSize.LargerPartLength;
+        recipe.thresholdSize = largerThresholds ? ThresholdSize.LargerPartLength : ThresholdSize.SmallerPartDiameter;
+        recipe.magnetAlignFirst = alignFirst;
         recipe.magnet = true;
         recipe.magnetRadius = 0.25f;
         recipe.magnetMaxAngle = 45f;

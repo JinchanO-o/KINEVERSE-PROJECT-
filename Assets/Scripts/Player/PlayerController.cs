@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
@@ -102,6 +103,14 @@ public class PlayerController : MonoBehaviour
     float _shake;
     bool _grounded;
 
+    // Items moved into the capsule by scripts, ignored by the capsule until they are clear of it (see IgnoreItemsInside).
+    // Shrink of the capsule radius, in metres, when looking for items inside it: an item only touching it does not count.
+    const float ItemOverlapMargin = 0.01f;
+    static readonly Collider[] s_itemOverlaps = new Collider[32];
+    readonly HashSet<Collider> _ignoredItems = new HashSet<Collider>();
+    readonly List<Collider> _ignoredScratch = new List<Collider>();
+    int _pickableMask;
+
     void Awake()
     {
         _cc = GetComponent<CharacterController>();
@@ -110,6 +119,7 @@ public class PlayerController : MonoBehaviour
 
         // The player never collides with its own body or with items through this mask.
         obstacleMask &= ~LayerMask.GetMask("Player", "Pickable");
+        _pickableMask = LayerMask.GetMask("Pickable");
 
         if (footstepSource == null)
         {
@@ -206,11 +216,57 @@ public class PlayerController : MonoBehaviour
             _velocity.y = Mathf.Sqrt(2f * gravity * jumpHeight);
 
         _velocity = new Vector3(horizontal.x, _velocity.y, horizontal.z);
+        IgnoreItemsInside();
         _cc.Move(_velocity * dt); // CharacterController resolves walls, table and floor
 
         HorizontalSpeed = horizontal.magnitude;
         if (_grounded && HorizontalSpeed > 0.01f)
             _bobPhase += HorizontalSpeed * dt * bobPerMetre * Mathf.PI * 2f;
+    }
+
+    /// <summary>
+    /// Items are moved by scripts that ignore the player (carrying, axis moves, assembly snaps, magnets and effects),
+    /// while the Player and Pickable layers collide. CharacterController.Move pushes the capsule out of an item moved
+    /// into it, and since the hold point follows the camera, that push repeats every frame and drags the player away.
+    /// So an item that really overlaps the capsule (radius shrunk by ItemOverlapMargin, so an item resting against it
+    /// at skin distance does not count) stops colliding with the player, until it is clear of the capsule grown by
+    /// the skin width again. Walking into a resting item is still blocked as before. Allocates nothing per frame.
+    /// </summary>
+    void IgnoreItemsInside()
+    {
+        Vector3 s = transform.lossyScale;
+        float widthScale = Mathf.Max(Mathf.Abs(s.x), Mathf.Abs(s.z));
+        float r = _cc.radius * widthScale;
+        float height = Mathf.Max(_cc.height * Mathf.Abs(s.y), 2f * r);
+        Vector3 center = transform.TransformPoint(_cc.center);
+        Vector3 half = transform.up * (height * 0.5f - r);
+        Vector3 bottom = center - half, top = center + half;
+
+        int count = Physics.OverlapCapsuleNonAlloc(bottom, top, Mathf.Max(0.001f, r - ItemOverlapMargin),
+                                                   s_itemOverlaps, _pickableMask, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < count; i++)
+            if (_ignoredItems.Add(s_itemOverlaps[i])) Physics.IgnoreCollision(_cc, s_itemOverlaps[i], true);
+        if (_ignoredItems.Count == 0) return;
+
+        // Hysteresis: collide again only once the item is clear of the capsule grown by the skin width.
+        int near = Physics.OverlapCapsuleNonAlloc(bottom, top, r + _cc.skinWidth * widthScale,
+                                                  s_itemOverlaps, _pickableMask, QueryTriggerInteraction.Ignore);
+        _ignoredScratch.Clear();
+        _ignoredScratch.AddRange(_ignoredItems);
+        foreach (Collider c in _ignoredScratch)
+        {
+            // A destroyed or deactivated collider has lost its ignore state already.
+            if (c == null || !c.enabled || !c.gameObject.activeInHierarchy)
+            {
+                _ignoredItems.Remove(c);
+                continue;
+            }
+            bool stillNear = false;
+            for (int i = 0; i < near && !stillNear; i++) stillNear = s_itemOverlaps[i] == c;
+            if (stillNear) continue;
+            Physics.IgnoreCollision(_cc, c, false);
+            _ignoredItems.Remove(c);
+        }
     }
 
     /// <summary>

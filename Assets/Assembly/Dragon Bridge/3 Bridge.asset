@@ -34,6 +34,7 @@ MonoBehaviour:
   magnetMaxAngle: 45
   magnetSeconds: 0.4
   magnetBreakSpeed: 6
+  magnetAlignFirst: 1
   resultTemplateNode: 
   effect: 0
   completionMessage: 
